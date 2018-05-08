@@ -107,7 +107,7 @@ func simulateSpeed(ctx context.Context, timeout float64, serverConfig serverConf
 	}
 
 	enableCors(&w)
-	http.ServeFile(w, r, serverConfig.rootDir+"/"+r.URL.Path[1:])
+	http.ServeFile(w, r, serverConfig.rootDir+r.URL.Path[1:])
 	flusher.Flush()
 	done <- true
 }
@@ -226,7 +226,9 @@ func main() {
 	serverConfig.httpsPort = ":" + strconv.Itoa(*httpsCLF)
 	serverConfig.rsaKeyPath = *rsaKeyPathCLF
 	serverConfig.rsaCertPath = *rsaCertPathCLF
-	serverConfig.rootDir = *rootDirCLF
+	if *rootDirCLF != "" {
+		serverConfig.rootDir = *rootDirCLF + "/"
+	}
 	serverConfig.defaultSpeed = *defaultSpeedCLF
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
