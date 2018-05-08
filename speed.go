@@ -65,11 +65,34 @@ XvUg+Qw5Eep6XDyq43MaNFywBqcZYai1YZnacJ2Cc6fmraKDWPtVMvwh4Jj0LBGb
 F5Eyba7Xn8syaOD8U1dhOa8A4Q3rMe0hA3LWI34O6goGbUzpBeXjWfBbnhU=
 -----END CERTIFICATE-----`)
 
+type serverConfig struct {
+	httpPort     string
+	httpsPort    string
+	rsaKeyPath   string
+	rsaCertPath  string
+	rootDir      string
+	defaultSpeed float64
+}
+
+// helpers
+
+func localIP() net.IP {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP
+}
+
 func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
 }
 
-func simulateSpeed(ctx context.Context, timeout float64, w http.ResponseWriter, r *http.Request, done chan<- bool) {
+func simulateSpeed(ctx context.Context, timeout float64, serverConfig serverConfig, w http.ResponseWriter, r *http.Request, done chan<- bool) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -84,19 +107,17 @@ func simulateSpeed(ctx context.Context, timeout float64, w http.ResponseWriter, 
 	}
 
 	enableCors(&w)
-
-	http.ServeFile(w, r, r.URL.Path[1:])
+	http.ServeFile(w, r, serverConfig.rootDir+"/"+r.URL.Path[1:])
 	flusher.Flush()
 	done <- true
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
+func handler(w http.ResponseWriter, r *http.Request, serverConfig serverConfig) {
 	// Print body to console, for DEV
 	if r.Method != "GET" {
 		color.Blue("###############################")
 		contentType := r.Header.Get("Content-type")
 		color.Blue(r.Method + "-request with content-type: " + contentType)
-
 		body, err := ioutil.ReadAll(r.Body)
 		defer r.Body.Close()
 		if err == nil {
@@ -112,7 +133,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	speed := float64(0)
+	speed := serverConfig.defaultSpeed
 	speedQueryParam, ok := r.URL.Query()["speed"]
 	if ok || len(speedQueryParam) > 1 {
 		speedFactor, err := strconv.ParseFloat(speedQueryParam[0], 64)
@@ -125,7 +146,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go simulateSpeed(ctx, speed, w, r, done)
+	go simulateSpeed(ctx, speed, serverConfig, w, r, done)
 	select {
 	case <-done:
 	case <-time.After(time.Second * 60):
@@ -140,26 +161,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func localIP() net.IP {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-
-	return localAddr.IP
-}
-
-func run(port string, sslPort string) chan error {
+func run(serverConfig serverConfig) chan error {
 	ip := localIP()
 	errs := make(chan error)
 	// Starting HTTP server
 	go func() {
-		color.Cyan("🚀 Local HTTP on http://localhost%s", port)
-		color.Cyan("🚀 External HTTP on http://%s%s", ip, port)
-		if err := http.ListenAndServe(port, nil); err != nil {
+		color.Cyan("🚀 Local HTTP on http://localhost%s", serverConfig.httpPort)
+		color.Cyan("🚀 External HTTP on http://%s%s", ip, serverConfig.httpPort)
+		if err := http.ListenAndServe(serverConfig.httpPort, nil); err != nil {
 			errs <- err
 		}
 
@@ -169,16 +178,23 @@ func run(port string, sslPort string) chan error {
 	go func() {
 		// just for ordering
 		time.Sleep(200 * time.Millisecond)
-		color.Green("🚀 Local HTTPS on https://localhost%s", sslPort)
-		color.Green("🚀 External HTTPS on https://%s%s", ip, sslPort)
-		cert, certErr := tls.X509KeyPair(rsaCertPEM, rsaKeyPEM)
+		color.Green("🚀 Local HTTPS on https://localhost%s", serverConfig.httpsPort)
+		color.Green("🚀 External HTTPS on https://%s%s", ip, serverConfig.httpsPort)
+		var cert tls.Certificate
+		var certErr error
+		if (serverConfig.rsaKeyPath != "") && (serverConfig.rsaCertPath != "") {
+			cert, certErr = tls.LoadX509KeyPair(serverConfig.rsaCertPath, serverConfig.rsaKeyPath)
+		} else {
+			cert, certErr = tls.X509KeyPair(rsaCertPEM, rsaKeyPEM)
+		}
+
 		if certErr != nil {
 			errs <- certErr
 		}
 		tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
 		server := http.Server{
 			// Other options
-			Addr:      sslPort,
+			Addr:      serverConfig.httpsPort,
 			TLSConfig: tlsConfig,
 		}
 
@@ -192,16 +208,31 @@ func run(port string, sslPort string) chan error {
 }
 
 func main() {
-	http.HandleFunc("/", handler)
-
+	// httpPort     string
+	// httpsPort    string
+	// rsaKeyPath   string
+	// rsaCertPath  string
+	// rootDir      string
+	// defaultSpeed float64
+	var serverConfig serverConfig
 	httpCLF := flag.Int("http", 8080, "http port")
 	httpsCLF := flag.Int("https", 8443, "https port")
+	rsaKeyPathCLF := flag.String("key", "", "key path")
+	rsaCertPathCLF := flag.String("cert", "", "cert path")
+	rootDirCLF := flag.String("root", "", "root directory")
+	defaultSpeedCLF := flag.Float64("defaultSpeed", 0, "default speed")
 	flag.Parse()
+	serverConfig.httpPort = ":" + strconv.Itoa(*httpCLF)
+	serverConfig.httpsPort = ":" + strconv.Itoa(*httpsCLF)
+	serverConfig.rsaKeyPath = *rsaKeyPathCLF
+	serverConfig.rsaCertPath = *rsaCertPathCLF
+	serverConfig.rootDir = *rootDirCLF
+	serverConfig.defaultSpeed = *defaultSpeedCLF
 
-	httpPort := ":" + strconv.Itoa(*httpCLF)
-	httpsPort := ":" + strconv.Itoa(*httpsCLF)
-
-	errs := run(httpPort, httpsPort)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		handler(w, r, serverConfig)
+	})
+	errs := run(serverConfig)
 
 	// This will run forever until channel receives error
 	select {
