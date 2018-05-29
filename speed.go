@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/NYTimes/gziphandler"
 	color "github.com/fatih/color"
 )
 
@@ -92,6 +95,13 @@ func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
 }
 
+func getFileExtension(s string) string {
+	if idx := strings.LastIndex(s, "."); idx != -1 {
+		return s[idx:]
+	}
+	return ""
+}
+
 func simulateSpeed(ctx context.Context, timeout float64, serverConfig serverConfig, w http.ResponseWriter, r *http.Request, done chan<- bool) {
 
 	flusher, ok := w.(http.Flusher)
@@ -107,7 +117,18 @@ func simulateSpeed(ctx context.Context, timeout float64, serverConfig serverConf
 	}
 
 	enableCors(&w)
-	http.ServeFile(w, r, serverConfig.rootDir+r.URL.Path[1:])
+	typ := mime.TypeByExtension(getFileExtension(r.URL.Path))
+	fs := http.FileServer(http.Dir(serverConfig.rootDir))
+	switch {
+	case strings.HasPrefix(typ, "text/"):
+		fmt.Println("gzip")
+		fs = gziphandler.GzipHandler(fs)
+	case typ == "application/xml":
+		fs = gziphandler.GzipHandler(fs)
+	case typ == "":
+		fs = gziphandler.GzipHandler(fs)
+	}
+	fs.ServeHTTP(w, r)
 	flusher.Flush()
 	done <- true
 }
