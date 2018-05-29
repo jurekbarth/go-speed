@@ -121,9 +121,10 @@ func simulateSpeed(ctx context.Context, timeout float64, serverConfig serverConf
 	fs := http.FileServer(http.Dir(serverConfig.rootDir))
 	switch {
 	case strings.HasPrefix(typ, "text/"):
-		fmt.Println("gzip")
 		fs = gziphandler.GzipHandler(fs)
 	case typ == "application/xml":
+		fs = gziphandler.GzipHandler(fs)
+	case typ == "application/javascript":
 		fs = gziphandler.GzipHandler(fs)
 	case typ == "":
 		fs = gziphandler.GzipHandler(fs)
